@@ -87,3 +87,73 @@ Al consultar el endpoint de la API REST (`/api/metrics`), el cliente sufre de **
 * `at` (Marca de tiempo ISO)
 
 Todos estos campos son datos sobrantes no requeridos. Este problema es exactamente el que resuelve **GraphQL**, permitiendo que el cliente consulte únicamente el campo necesario (`cpu_temp_c`) mediante una consulta filtrada.
+
+
+
+Preguntas
+-----------------------------------------------------------------
+1-¿Por qué la temperatura suele aparecer como “No disponibleˮ en Windows? Prueben abrir la terminal
+como administrador y comparen.
+
+En mi equipo (DESKTOP-8LEPEML), la temperatura aparece como "No disponible" porque la lectura utiliza la clase MSAcpi_ThermalZoneTemperature dentro del espacio de nombres WMI root/wmi. Esta consulta requiere ejecutarse obligatoriamente con permisos elevados de Administrador en Windows y depende de que la placa madre exponga los sensores ACPI a WMI. Al ejecutar la app sin permisos de administrador (o en placas que no reportan dicho valor), la llamada a PowerShell falla silenciosamente dentro del bloque try-catch y retorna null.
+
+
+-----------------------------------------------------------------
+2-¿Por qué el script de PowerShell nunca debe incluir datos que vengan del usuario?
+
+El script de PowerShell se ejecuta directamente en el sistema operativo mediante la función shell_exec(). Si se incluyeran variables enviadas por el usuario (como parámetros de la URL o entradas de un formulario), la aplicación quedaría expuesta a una vulnerabilidad crítica de Inyección de Comandos (Command Injection). Un atacante podría concatenar sus propios comandos de PowerShell para ejecutar código no autorizado y tomar el control total del servidor.
+
+
+----------------------------------------------------------------
+3-¿Qué riesgo tiene dejar  /api/metrics sin autenticación en un servidor real?
+
+-Exposición de información sensible: Revela públicamente datos internos de la infraestructura, como el nombre de mi máquina (DESKTOP-8LEPEML), el sistema operativo (Windows NT 10.0), la versión exacta de PHP (8.3.31) y el uso real de recursos.   -Riesgo de Denegación de Servicio (DoS): Cada llamada a la API genera y ejecuta un proceso de PowerShell en segundo plano. Peticiones masivas sin autenticar saturarían rápidamente el uso de CPU de la máquina, dejando el servidor inoperativo.   
+
+
+-----------------------------------------------------------------
+4-Con polling cada 5 segundos, ¿cuántos pedidos por minuto recibe el servidor si hay 50 personas
+mirando?
+
+-Pedidos por usuario: Como el navegador consulta al servidor cada 5 segundos, un solo usuario realiza 12 pedidos por minuto (60 segundos divididos 5 segundos).   
+-Total para 50 usuarios: Si 50 personas tienen la página abierta al mismo tiempo, el servidor recibe 600 solicitudes por minuto (50 usuarios multiplicados por 12 pedidos).
+
+
+-----------------------------------------------------------------
+5-Si una app solo necesita la temperatura, ¿qué datos recibe de más al llamar a  Criterios de evaluación Criterio /api/metrics  ?
+
+Al realizar una petición al endpoint REST /api/metrics, la aplicación sufre del problema de over-fetching (recibir más información de la que realmente necesita). Debido a que la API REST devuelve un objeto JSON con una estructura fija, el servidor envía todos los datos en cada consulta.
+
+Datos recibidos en exceso:
+Si la aplicación solo requiere el valor de la temperatura (cpu_temp_c), está recibiendo innecesariamente los siguientes campos:
+
+hostname: Nombre del equipo ("DESKTOP-8LEPEML").
+
+os: Sistema operativo ("Windows NT 10.0").
+
+php: Versión de PHP ("8.3.31").
+
+disk: Objeto completo con información del disco (total_gb, free_gb, used_pct).
+
+memory: Objeto completo con información de la memoria RAM (total_mb, available_mb, used_pct).
+
+cpu_pct: Porcentaje de uso del procesador.
+
+uptime_s: Tiempo que lleva encendido el sistema en segundos.
+
+at: Marca de tiempo en formato ISO.
+
+Impacto en el sistema:
+Desperdicio de ancho de banda: Se envían bytes innecesarios a través de la red en cada petición de polling.
+
+Sobrecarga de procesamiento: El servidor ejecuta comandos de PowerShell y consultas a WMI para calcular el estado del disco, la memoria y la CPU, consumo que resulta en vano porque el cliente termina descartando esa información.
+
+Solución con GraphQL:
+GraphQL resuelve este problema permitiendo que la aplicación cliente solicite únicamente el campo que necesita. En lugar de traer todo el objeto, se realiza una consulta específica:
+
+GraphQL
+query {
+  metrics {
+    cpu_temp_c
+  }
+}
+De este modo, el servidor responde exclusivamente con el valor de la temperatura, reduciendo el tráfico de datos y optimizando el rendimiento.
